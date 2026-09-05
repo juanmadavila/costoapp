@@ -41,8 +41,8 @@ type Expense = {
 }
 
 const categories = {
-  Profesional: ['Materiales', 'Mano de obra', 'Herramientas', 'Transporte', 'Servicios', 'Otros'],
-  Personal: ['Vivienda', 'Alimentación', 'Transporte', 'Salud', 'Ocio', 'Otros'],
+  Profesional: ['Materiales e insumos', 'Mano de obra', 'Herramientas', 'Transporte', 'Servicios', 'Otros'],
+  Personal: ['Vivienda', 'Alimentación','Educación', 'Ropa', 'Transporte', 'Salud', 'Salidas', 'Otros'],
 }
 
 const money = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' })
@@ -86,7 +86,7 @@ function LoginView({ onLogin, isDark, onToggleTheme }: { onLogin: (email: string
             {error && <p className="text-sm text-destructive">{error}</p>}
             <button type="submit" className="mt-2 inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground transition hover:opacity-90"><LockKeyhole className="size-4" /> Entrar a CostoApp</button>
           </form>
-          <p className="mt-6 text-center text-xs leading-5 text-muted-foreground">Usa una cuenta registrada en Supabase para continuar.</p>
+          <p className="mt-6 text-center text-xs leading-5 text-muted-foreground">Usa una cuenta registrada para continuar.</p>
         </section>
       </div>
     </main>
@@ -240,7 +240,7 @@ export default function Page() {
             <div className="min-w-0"><p className="truncate font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground sm:text-xs sm:tracking-[0.24em]">Control financiero</p><h1 className="font-serif text-xl font-semibold tracking-tight sm:text-2xl">CostoApp</h1></div>
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-            <div className="hidden items-center gap-2 text-sm text-muted-foreground lg:flex"><span className="size-2 rounded-full bg-chart-2" /> Datos locales · Demo</div>
+            <div className="hidden items-center gap-2 text-sm text-muted-foreground lg:flex"><span className="size-2 rounded-full bg-chart-2" /> Demo</div>
             <button onClick={() => setIsDark((current) => !current)} className="rounded-lg border border-border p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label={isDark ? 'Activar modo claro' : 'Activar modo oscuro'} title={isDark ? 'Modo claro' : 'Modo oscuro'}>
               {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
             </button>
@@ -254,7 +254,7 @@ export default function Page() {
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
         <section className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
-          <div><p className="mb-2 font-mono text-xs uppercase tracking-[0.2em] text-primary">Resumen mensual</p><h2 className="font-serif text-4xl font-semibold tracking-tight sm:text-5xl">Tus gastos, <em className="text-primary">bajo control.</em></h2><p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">Una vista clara para separar lo que cuesta tu trabajo de lo que cuesta tu vida.</p>
+          <div><p className="mb-2 font-mono text-xs uppercase tracking-[0.2em] text-primary">Resumen mensual</p><h2 className="font-serif text-4xl font-semibold tracking-tight sm:text-5xl">Tus gastos, <em className="text-primary">bajo control.</em></h2>
           </div>
           <button onClick={openNew} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90"><Plus data-icon="inline-start" /> Añadir gasto</button>
         </section>
