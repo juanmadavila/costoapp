@@ -1,0 +1,25 @@
+{
+  "name": "CostoApp · Control de gastos",
+  "short_name": "CostoApp",
+  "description": "Gestiona tus gastos profesionales y personales con claridad.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F7F5EF",
+  "theme_color": "#10B981",
+  "lang": "es",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "180x180",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

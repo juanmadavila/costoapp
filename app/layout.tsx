@@ -11,11 +11,18 @@ export const metadata: Metadata = {
   title: 'CostoApp · Control de gastos',
   description: 'Gestiona tus gastos profesionales y personales con claridad.',
   generator: 'v0.app',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    title: 'CostoApp',
+    statusBarStyle: 'default',
+  },
 }
 
 export const viewport: Viewport = {
   colorScheme: 'light dark',
   themeColor: '#10B981',
+  viewportFit: 'cover',
   userScalable: true,
 }
 

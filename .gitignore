@@ -11,5 +11,8 @@ __v0_jsx-dev-runtime.ts
 
 # Common ignores
 node_modules
+package-lock.json
 .next/
+public/sw.js
+public/workbox-*.js
 .DS_Store
