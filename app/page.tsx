@@ -26,10 +26,11 @@ import {
   Moon,
   Sun,
 } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
 
 type ExpenseType = 'Profesional' | 'Personal'
 type Expense = {
-  id: number
+  id: string
   date: string
   description: string
   category: string
@@ -44,25 +45,25 @@ const categories = {
   Personal: ['Vivienda', 'Alimentación', 'Transporte', 'Salud', 'Ocio', 'Otros'],
 }
 
-const initialExpenses: Expense[] = [
-  { id: 1, date: '2026-09-03', description: 'Cemento y arena', category: 'Materiales', type: 'Profesional', amount: 385.5, project: 'Reforma cocina' },
-  { id: 2, date: '2026-09-02', description: 'Combustible furgoneta', category: 'Transporte', type: 'Profesional', amount: 72.4, project: 'Reforma cocina' },
-  { id: 3, date: '2026-09-01', description: 'Compra supermercado', category: 'Alimentación', type: 'Personal', amount: 96.2 },
-  { id: 4, date: '2026-08-29', description: 'Taladro percutor', category: 'Herramientas', type: 'Profesional', amount: 219.99, project: 'Baño principal' },
-  { id: 5, date: '2026-08-27', description: 'Seguro autónomo', category: 'Servicios', type: 'Profesional', amount: 154.8, project: 'General' },
-  { id: 6, date: '2026-08-22', description: 'Farmacia', category: 'Salud', type: 'Personal', amount: 34.75 },
-]
-
 const money = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' })
 const dateFormat = new Intl.DateTimeFormat('es-ES', { day: '2-digit', month: 'short' })
+const today = () => new Date().toISOString().slice(0, 10)
+const currentMonth = () => today().slice(0, 7)
+const monthStart = (value: string) => `${value}-01`
 
-function LoginView({ onLogin, isDark, onToggleTheme }: { onLogin: () => void; isDark: boolean; onToggleTheme: () => void }) {
+function LoginView({ onLogin, isDark, onToggleTheme }: { onLogin: (email: string, password: string) => Promise<void>; isDark: boolean; onToggleTheme: () => void }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
 
-  function submitLogin(event: React.FormEvent<HTMLFormElement>) {
+  async function submitLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (email.trim() && password.trim()) onLogin()
+    setError('')
+    try {
+      await onLogin(email, password)
+    } catch (loginError) {
+      setError(loginError instanceof Error ? loginError.message : 'No se pudo iniciar sesión.')
+    }
   }
 
   return (
@@ -82,9 +83,10 @@ function LoginView({ onLogin, isDark, onToggleTheme }: { onLogin: () => void; is
           <form onSubmit={submitLogin} className="flex flex-col gap-5">
             <label className="flex flex-col gap-2 text-sm font-medium">Correo electrónico<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="tu@correo.com" className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" /></label>
             <label className="flex flex-col gap-2 text-sm font-medium">Contraseña<input required minLength={4} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" /></label>
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <button type="submit" className="mt-2 inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground transition hover:opacity-90"><LockKeyhole className="size-4" /> Entrar a CostoApp</button>
           </form>
-          <p className="mt-6 text-center text-xs leading-5 text-muted-foreground">Demo local: utiliza cualquier correo y contraseña para continuar.</p>
+          <p className="mt-6 text-center text-xs leading-5 text-muted-foreground">Usa una cuenta registrada en Supabase para continuar.</p>
         </section>
       </div>
     </main>
@@ -92,9 +94,9 @@ function LoginView({ onLogin, isDark, onToggleTheme }: { onLogin: () => void; is
 }
 
 export default function Page() {
-  const [expenses, setExpenses] = useState(initialExpenses)
+  const [expenses, setExpenses] = useState<Expense[]>([])
   const [activeType, setActiveType] = useState<'Todos' | ExpenseType>('Todos')
-  const [month, setMonth] = useState('2026-09')
+  const [month, setMonth] = useState(currentMonth)
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('Todas')
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -102,14 +104,56 @@ export default function Page() {
   const [showFilters, setShowFilters] = useState(false)
   const [isDark, setIsDark] = useState(false)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
-  const [monthlyBudgets, setMonthlyBudgets] = useState<Record<ExpenseType, string>>({ Profesional: '1000', Personal: '500' })
+  const [userId, setUserId] = useState<string | null>(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [monthlyBudgets, setMonthlyBudgets] = useState<Partial<Record<ExpenseType, string>>>({})
   const [budgetEditor, setBudgetEditor] = useState<ExpenseType | null>(null)
   const [budgetForm, setBudgetForm] = useState('')
-  const [form, setForm] = useState({ description: '', amount: '', date: '2026-09-05', category: 'Materiales', type: 'Profesional' as ExpenseType, project: '', notes: '' })
+  const [form, setForm] = useState({ description: '', amount: '', date: today(), category: categories.Profesional[0], type: 'Profesional' as ExpenseType, project: '', notes: '' })
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDark)
   }, [isDark])
+
+  useEffect(() => {
+    let mounted = true
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!mounted) return
+      setUserId(session?.user.id ?? null)
+      setIsLoggedIn(Boolean(session))
+      setAuthReady(true)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUserId(session?.user.id ?? null)
+      setIsLoggedIn(Boolean(session))
+    })
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!userId) {
+      setExpenses([])
+      setMonthlyBudgets({})
+      return
+    }
+    setIsLoading(true)
+    Promise.all([
+      supabase.from('expenses').select('id, spent_on, description, category, type, amount, project, notes').eq('user_id', userId).order('spent_on', { ascending: false }),
+      supabase.from('monthly_budgets').select('type, amount').eq('user_id', userId).eq('month', monthStart(month)),
+    ]).then(([expensesResult, budgetsResult]) => {
+      if (expensesResult.error) throw expensesResult.error
+      if (budgetsResult.error) throw budgetsResult.error
+      setExpenses((expensesResult.data ?? []).map((expense) => ({ id: expense.id, date: expense.spent_on, description: expense.description, category: expense.category, type: expense.type as ExpenseType, amount: Number(expense.amount), project: expense.project ?? undefined, notes: expense.notes ?? undefined })))
+      setMonthlyBudgets(Object.fromEntries((budgetsResult.data ?? []).map((budget) => [budget.type, String(budget.amount)])) as Partial<Record<ExpenseType, string>>)
+    }).catch(() => {
+      setExpenses([])
+      setMonthlyBudgets({})
+    }).finally(() => setIsLoading(false))
+  }, [userId, month])
 
   const filtered = useMemo(() => expenses
     .filter((expense) => expense.date.startsWith(month))
@@ -131,7 +175,8 @@ export default function Page() {
 
   function openNew() {
     setEditing(null)
-    setForm({ description: '', amount: '', date: '2026-09-05', category: activeType === 'Personal' ? 'Alimentación' : 'Materiales', type: activeType === 'Personal' ? 'Personal' : 'Profesional', project: '', notes: '' })
+    const type = activeType === 'Personal' ? 'Personal' : 'Profesional'
+    setForm({ description: '', amount: '', date: today(), category: categories[type][0], type, project: '', notes: '' })
     setIsFormOpen(true)
   }
 
@@ -141,31 +186,49 @@ export default function Page() {
     setIsFormOpen(true)
   }
 
-  function saveExpense(event: React.FormEvent) {
+  async function saveExpense(event: React.FormEvent) {
     event.preventDefault()
-    if (!form.description || !form.amount || Number(form.amount) <= 0) return
-    const next: Expense = { id: editing?.id ?? Date.now(), date: form.date, description: form.description, category: form.category, type: form.type, amount: Number(form.amount), project: form.type === 'Profesional' ? form.project || 'General' : undefined, notes: form.notes }
-    setExpenses((current) => editing ? current.map((expense) => expense.id === editing.id ? next : expense) : [next, ...current])
+    if (!userId || !form.description || !form.amount || Number(form.amount) <= 0) return
+    const values = { spent_on: form.date, description: form.description.trim(), category: form.category, type: form.type, amount: Number(form.amount), project: form.type === 'Profesional' ? form.project.trim() || null : null, notes: form.notes.trim() || null }
+    const result = editing
+      ? await supabase.from('expenses').update(values).eq('id', editing.id).eq('user_id', userId).select('id, spent_on, description, category, type, amount, project, notes').single()
+      : await supabase.from('expenses').insert({ ...values, user_id: userId }).select('id, spent_on, description, category, type, amount, project, notes').single()
+    if (result.error) return
+    const saved: Expense = { id: result.data.id, date: result.data.spent_on, description: result.data.description, category: result.data.category, type: result.data.type as ExpenseType, amount: Number(result.data.amount), project: result.data.project ?? undefined, notes: result.data.notes ?? undefined }
+    setExpenses((current) => editing ? current.map((expense) => expense.id === saved.id ? saved : expense) : [saved, ...current])
     setIsFormOpen(false)
   }
 
-  function deleteExpense(id: number) {
-    if (window.confirm('¿Eliminar este gasto?')) setExpenses((current) => current.filter((expense) => expense.id !== id))
+  async function deleteExpense(id: string) {
+    if (!userId || !window.confirm('¿Eliminar este gasto?')) return
+    const result = await supabase.from('expenses').delete().eq('id', id).eq('user_id', userId)
+    if (!result.error) setExpenses((current) => current.filter((expense) => expense.id !== id))
   }
 
   function openBudgetEditor(type: ExpenseType) {
     setBudgetEditor(type)
-    setBudgetForm(monthlyBudgets[type])
+    setBudgetForm(monthlyBudgets[type] ?? '')
   }
 
-  function saveBudget(event: React.FormEvent) {
+  async function saveBudget(event: React.FormEvent) {
     event.preventDefault()
-    if (!budgetEditor || !budgetForm || Number(budgetForm) <= 0) return
+    if (!userId || !budgetEditor || !budgetForm || Number(budgetForm) <= 0) return
+    const result = await supabase.from('monthly_budgets').upsert({ user_id: userId, month: monthStart(month), type: budgetEditor, amount: Number(budgetForm) }, { onConflict: 'user_id,month,type' })
+    if (result.error) return
     setMonthlyBudgets((current) => ({ ...current, [budgetEditor]: budgetForm }))
     setBudgetEditor(null)
   }
 
-  if (!isLoggedIn) return <LoginView onLogin={() => setIsLoggedIn(true)} isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} />
+  async function login(email: string, password: string) {
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) throw new Error('Correo o contraseña incorrectos.')
+  }
+
+  async function logout() {
+    await supabase.auth.signOut()
+  }
+
+  if (!authReady || !isLoggedIn) return <LoginView onLogin={login} isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} />
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -181,7 +244,7 @@ export default function Page() {
             <button onClick={() => setIsDark((current) => !current)} className="rounded-lg border border-border p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label={isDark ? 'Activar modo claro' : 'Activar modo oscuro'} title={isDark ? 'Modo claro' : 'Modo oscuro'}>
               {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
             </button>
-            <button onClick={() => setIsLoggedIn(false)} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Cerrar sesión" title="Cerrar sesión">
+            <button onClick={logout} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Cerrar sesión" title="Cerrar sesión">
               <LogOut className="size-4" /><span className="hidden sm:inline">Cerrar sesión</span>
             </button>
             <button className="rounded-lg p-2 text-muted-foreground sm:hidden" aria-label="Abrir menú"><Menu /></button>
@@ -191,7 +254,8 @@ export default function Page() {
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
         <section className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
-          <div><p className="mb-2 font-mono text-xs uppercase tracking-[0.2em] text-primary">Resumen mensual</p><h2 className="font-serif text-4xl font-semibold tracking-tight sm:text-5xl">Tus gastos, <em className="text-primary">bajo control.</em></h2><p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">Una vista clara para separar lo que cuesta tu trabajo de lo que cuesta tu vida.</p></div>
+          <div><p className="mb-2 font-mono text-xs uppercase tracking-[0.2em] text-primary">Resumen mensual</p><h2 className="font-serif text-4xl font-semibold tracking-tight sm:text-5xl">Tus gastos, <em className="text-primary">bajo control.</em></h2><p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">Una vista clara para separar lo que cuesta tu trabajo de lo que cuesta tu vida.</p>
+          </div>
           <button onClick={openNew} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90"><Plus data-icon="inline-start" /> Añadir gasto</button>
         </section>
 
@@ -199,7 +263,7 @@ export default function Page() {
           <div className="grid grid-cols-3 gap-1 rounded-xl bg-muted p-1">
             {(['Todos', 'Profesional', 'Personal'] as const).map((item) => <button key={item} onClick={() => { setActiveType(item); setCategory('Todas') }} className={`rounded-lg px-2 py-2 text-xs font-medium transition sm:px-4 sm:text-sm ${activeType === item ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{item === 'Todos' ? 'Todos' : item === 'Profesional' ? <span className="flex items-center gap-2"><BriefcaseBusiness className="size-4" /> Profesional</span> : <span className="flex items-center gap-2"><UserRound className="size-4" /> Personal</span>}</button>)}
           </div>
-          <label className="flex min-w-0 items-center gap-2 px-2 text-sm text-muted-foreground"><CalendarDays className="size-4" /><select value={month} onChange={(event) => setMonth(event.target.value)} className="bg-transparent font-medium text-foreground outline-none"><option value="2026-09">Septiembre 2026</option><option value="2026-08">Agosto 2026</option></select><ChevronDown className="size-4" /></label>
+          <label className="flex min-w-0 items-center gap-2 px-2 text-sm text-muted-foreground"><CalendarDays className="size-4" /><input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="bg-transparent font-medium text-foreground outline-none" /></label>
         </section>
 
         <section className="mb-6 grid gap-4 md:grid-cols-[1.4fr_1fr_1fr]">
