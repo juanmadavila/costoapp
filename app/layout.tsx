@@ -12,6 +12,10 @@ export const metadata: Metadata = {
   description: 'Gestiona tus gastos profesionales y personales con claridad.',
   generator: 'v0.app',
   manifest: '/manifest.json',
+  icons: {
+    icon: '/costoapp-receipt.svg',
+    apple: '/costoapp-receipt.svg',
+  },
   appleWebApp: {
     capable: true,
     title: 'CostoApp',

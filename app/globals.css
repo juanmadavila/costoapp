@@ -86,3 +86,7 @@ html { background: var(--background); }
 body { @apply bg-background text-foreground font-sans; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
+
+@media (hover: none), (pointer: coarse) {
+  [class~="group-hover:flex"] { display: flex !important; }
+}
