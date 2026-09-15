@@ -29,6 +29,7 @@ import { supabase } from '@/lib/supabase'
 
 type ExpenseType = 'Profesional' | 'Personal'
 type ModuleType = 'gastos' | 'ingresos'
+type Currency = 'EUR' | 'ARS'
 
 type Expense = {
   id: string
@@ -60,7 +61,8 @@ const defaultIncomeCategories = ['Salario', 'Freelance', 'Ventas', 'Inversiones'
 const EXPENSE_CATEGORIES_STORAGE_KEY = 'costoapp-expense-categories'
 const INCOME_CATEGORIES_STORAGE_KEY = 'costoapp-income-categories'
 
-const money = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' })
+const CURRENCY_STORAGE_KEY = 'costoapp-currency'
+const currencyStorageKey = (userId: string) => `${CURRENCY_STORAGE_KEY}:${userId}`
 const dateFormat = new Intl.DateTimeFormat('es-ES', { day: '2-digit', month: 'short' })
 const today = () => new Date().toISOString().slice(0, 10)
 const currentMonth = () => today().slice(0, 7)
@@ -258,6 +260,7 @@ export default function Page() {
   const [isDark, setIsDark] = useState(false)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(false)
+  const [currency, setCurrency] = useState<Currency>('ARS')
   const [userId, setUserId] = useState<string | null>(null)
   const [authReady, setAuthReady] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -279,6 +282,26 @@ export default function Page() {
   const [isAddingIncomeCategory, setIsAddingIncomeCategory] = useState(false)
   const [newIncomeCategory, setNewIncomeCategory] = useState('')
   const [incomeForm, setIncomeForm] = useState({ description: '', amount: '', date: today(), category: defaultIncomeCategories[0], source: '', notes: '' })
+
+  const money = useMemo(
+    () => new Intl.NumberFormat(currency === 'EUR' ? 'es-ES' : 'es-AR', { style: 'currency', currency }),
+    [currency],
+  )
+
+  useEffect(() => {
+    if (!userId) {
+      setCurrency('ARS')
+      return
+    }
+
+    const saved = window.localStorage.getItem(currencyStorageKey(userId))
+    setCurrency(saved === 'EUR' ? 'EUR' : 'ARS')
+  }, [userId])
+
+  useEffect(() => {
+    if (!userId) return
+    window.localStorage.setItem(currencyStorageKey(userId), currency)
+  }, [currency, userId])
 
   useEffect(() => {
     if (!userId) {
@@ -766,10 +789,16 @@ export default function Page() {
   }
 
   async function resetPassword(email: string) {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin,
-    })
-    if (error) throw new Error('No se pudo enviar el correo de recuperación.')
+    const { error } = await supabase.auth.resetPasswordForEmail(email)
+    if (error) {
+      if (error.message.toLowerCase().includes('email rate limit exceeded')) {
+        throw new Error('Se alcanzó el límite de correos de recuperación. Espera unos minutos antes de solicitar otro enlace.')
+      }
+      if (error.message.toLowerCase().includes('redirect')) {
+        throw new Error('La URL de recuperación no está configurada en Supabase. Agrega la URL de tu aplicación en Authentication > URL Configuration.')
+      }
+      throw new Error(`No se pudo enviar el correo de recuperación: ${error.message}`)
+    }
   }
 
   async function updatePassword(password: string) {
@@ -979,6 +1008,19 @@ export default function Page() {
 
                 <button
                   type="button"
+                  onClick={() => setCurrency((current) => current === 'EUR' ? 'ARS' : 'EUR')}
+                  className="mt-1 flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-foreground transition hover:bg-muted"
+                  aria-label={`Cambiar moneda. Moneda actual: ${currency === 'EUR' ? 'euros' : 'pesos argentinos'}`}
+                >
+                  <span className="flex items-center gap-2">
+                    <CircleDollarSign className="size-4" />
+                    Moneda
+                  </span>
+                  <span>{currency === 'EUR' ? 'EUR (€)' : 'ARS ($)'}</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => {
                     setIsNavMenuOpen(false)
                     void logout()
@@ -1184,15 +1226,15 @@ export default function Page() {
         ) : (
           <>
             <section className="mb-6 grid gap-4 md:grid-cols-[1.2fr_1fr_1fr]">
-              <div className="rounded-2xl bg-primary p-6 text-primary-foreground">
+              <div className="rounded-2xl bg-green-100 p-6 text-green-950 dark:bg-green-950/50 dark:text-green-100">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-sm text-primary-foreground/70">Ingreso total</p>
+                    <p className="text-sm text-green-950/70 dark:text-green-100/70">Ingreso total</p>
                     <p className="mt-2 font-serif text-4xl font-semibold">{money.format(incomeTotal)}</p>
                   </div>
                   <TrendingUp className="size-7 shrink-0 opacity-70" />
                 </div>
-                <div className="mt-8 flex items-center gap-2 text-sm text-primary-foreground/75">
+                <div className="mt-8 flex items-center gap-2 text-sm text-green-950/75 dark:text-green-100/75">
                   <Check className="size-4" /> Este mes · {filteredIncomes.length} registros
                 </div>
               </div>
