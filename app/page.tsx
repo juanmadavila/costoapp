@@ -67,6 +67,8 @@ const currentMonth = () => today().slice(0, 7)
 const monthStart = (value: string) => `${value}-01`
 const INACTIVITY_TIMEOUT_MS = 24 * 60 * 60 * 1000
 const LAST_SEEN_STORAGE_KEY = 'costoapp-last-seen'
+const expenseCategoriesStorageKey = (userId: string) => `${EXPENSE_CATEGORIES_STORAGE_KEY}:${userId}`
+const incomeCategoriesStorageKey = (userId: string) => `${INCOME_CATEGORIES_STORAGE_KEY}:${userId}`
 
 function getLastSeenTimestamp() {
   if (typeof window === 'undefined') return 0
@@ -172,42 +174,68 @@ export default function Page() {
   const [budgetForm, setBudgetForm] = useState('')
   const [incomeGoalEditor, setIncomeGoalEditor] = useState(false)
   const [incomeGoalForm, setIncomeGoalForm] = useState('')
-  const [expenseCategoryOptions, setExpenseCategoryOptions] = useState<Record<ExpenseType, string[]>>(() => {
-    if (typeof window === 'undefined') return expenseCategories
-
-    try {
-      const saved = window.localStorage.getItem(EXPENSE_CATEGORIES_STORAGE_KEY)
-      const parsed = saved ? JSON.parse(saved) : null
-      return parsed?.Profesional?.length && parsed?.Personal?.length ? parsed : expenseCategories
-    } catch {
-      return expenseCategories
-    }
-  })
+  const [expenseCategoryOptions, setExpenseCategoryOptions] = useState<Record<ExpenseType, string[]>>(expenseCategories)
+  const [categoryStorageUserId, setCategoryStorageUserId] = useState<string | null>(null)
   const [isAddingExpenseCategory, setIsAddingExpenseCategory] = useState(false)
   const [newExpenseCategory, setNewExpenseCategory] = useState('')
   const [form, setForm] = useState({ description: '', amount: '', date: today(), category: expenseCategories.Profesional[0], type: 'Profesional' as ExpenseType, project: '', notes: '' })
   const [incomeCategories, setIncomeCategories] = useState<string[]>(() => {
-    if (typeof window === 'undefined') return defaultIncomeCategories
-
-    try {
-      const saved = window.localStorage.getItem(INCOME_CATEGORIES_STORAGE_KEY)
-      const parsed = saved ? JSON.parse(saved) : null
-      return Array.isArray(parsed) && parsed.length > 0 ? parsed : defaultIncomeCategories
-    } catch {
-      return defaultIncomeCategories
-    }
+    return defaultIncomeCategories
   })
+  const [incomeCategoryStorageUserId, setIncomeCategoryStorageUserId] = useState<string | null>(null)
   const [isAddingIncomeCategory, setIsAddingIncomeCategory] = useState(false)
   const [newIncomeCategory, setNewIncomeCategory] = useState('')
   const [incomeForm, setIncomeForm] = useState({ description: '', amount: '', date: today(), category: defaultIncomeCategories[0], source: '', notes: '' })
 
   useEffect(() => {
-    window.localStorage.setItem(EXPENSE_CATEGORIES_STORAGE_KEY, JSON.stringify(expenseCategoryOptions))
-  }, [expenseCategoryOptions])
+    if (!userId) {
+      setExpenseCategoryOptions(expenseCategories)
+      setCategoryStorageUserId(null)
+      return
+    }
+
+    try {
+      const saved = window.localStorage.getItem(expenseCategoriesStorageKey(userId))
+      const parsed = saved ? JSON.parse(saved) : null
+      if (parsed?.Profesional?.length && parsed?.Personal?.length) {
+        setExpenseCategoryOptions(parsed)
+      } else {
+        setExpenseCategoryOptions(expenseCategories)
+      }
+    } catch {
+      setExpenseCategoryOptions(expenseCategories)
+    }
+
+    setCategoryStorageUserId(userId)
+  }, [userId])
 
   useEffect(() => {
-    window.localStorage.setItem(INCOME_CATEGORIES_STORAGE_KEY, JSON.stringify(incomeCategories))
-  }, [incomeCategories])
+    if (!userId || categoryStorageUserId !== userId) return
+    window.localStorage.setItem(expenseCategoriesStorageKey(userId), JSON.stringify(expenseCategoryOptions))
+  }, [categoryStorageUserId, expenseCategoryOptions, userId])
+
+  useEffect(() => {
+    if (!userId) {
+      setIncomeCategories(defaultIncomeCategories)
+      setIncomeCategoryStorageUserId(null)
+      return
+    }
+
+    try {
+      const saved = window.localStorage.getItem(incomeCategoriesStorageKey(userId))
+      const parsed = saved ? JSON.parse(saved) : null
+      setIncomeCategories(Array.isArray(parsed) && parsed.length > 0 ? parsed : defaultIncomeCategories)
+    } catch {
+      setIncomeCategories(defaultIncomeCategories)
+    }
+
+    setIncomeCategoryStorageUserId(userId)
+  }, [userId])
+
+  useEffect(() => {
+    if (!userId || incomeCategoryStorageUserId !== userId) return
+    window.localStorage.setItem(incomeCategoriesStorageKey(userId), JSON.stringify(incomeCategories))
+  }, [incomeCategories, incomeCategoryStorageUserId, userId])
 
   const currentCategory = activeModule === 'gastos' ? expenseCategory : incomeCategory
 
@@ -303,6 +331,23 @@ export default function Page() {
           })),
         )
 
+        setExpenseCategoryOptions((current) => {
+          const next = {
+            Profesional: [...current.Profesional],
+            Personal: [...current.Personal],
+          }
+
+          for (const expense of expensesResult.data ?? []) {
+            const category = expense.category.trim()
+            const categories = next[expense.type as ExpenseType]
+            if (category && !categories.some((item) => item.toLowerCase() === category.toLowerCase())) {
+              categories.push(category)
+            }
+          }
+
+          return next
+        })
+
         setIncomes(
           (incomesResult.data ?? []).map((income) => ({
             id: income.id,
@@ -314,6 +359,19 @@ export default function Page() {
             notes: income.notes ?? undefined,
           })),
         )
+
+        setIncomeCategories((current) => {
+          const next = [...current]
+
+          for (const income of incomesResult.data ?? []) {
+            const category = income.category.trim()
+            if (category && !next.some((item) => item.toLowerCase() === category.toLowerCase())) {
+              next.push(category)
+            }
+          }
+
+          return next
+        })
 
         setMonthlyBudgets(
           Object.fromEntries((budgetsResult.data ?? []).map((budget) => [budget.type, String(budget.amount)])) as Partial<Record<ExpenseType, string>>,
