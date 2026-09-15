@@ -85,10 +85,12 @@ function setLastSeenTimestamp() {
   window.localStorage.setItem(LAST_SEEN_STORAGE_KEY, String(Date.now()))
 }
 
-function LoginView({ onLogin, isDark, onToggleTheme, notice }: { onLogin: (email: string, password: string) => Promise<void>; isDark: boolean; onToggleTheme: () => void; notice?: string }) {
+function LoginView({ onLogin, onResetPassword, isDark, onToggleTheme, notice }: { onLogin: (email: string, password: string) => Promise<void>; onResetPassword: (email: string) => Promise<void>; isDark: boolean; onToggleTheme: () => void; notice?: string }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [resetMessage, setResetMessage] = useState('')
+  const [isResetting, setIsResetting] = useState(false)
 
   async function submitLogin(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -97,6 +99,25 @@ function LoginView({ onLogin, isDark, onToggleTheme, notice }: { onLogin: (email
       await onLogin(email, password)
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : 'No se pudo iniciar sesión.')
+    }
+  }
+
+  async function submitPasswordReset() {
+    setError('')
+    setResetMessage('')
+    if (!email.trim()) {
+      setError('Escribe tu correo electrónico para recibir el enlace.')
+      return
+    }
+
+    setIsResetting(true)
+    try {
+      await onResetPassword(email.trim())
+      setResetMessage('Si el correo está registrado, recibirás un enlace para restablecer tu contraseña.')
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : 'No se pudo enviar el correo de recuperación.')
+    } finally {
+      setIsResetting(false)
     }
   }
 
@@ -123,7 +144,7 @@ function LoginView({ onLogin, isDark, onToggleTheme, notice }: { onLogin: (email
             <p className="mt-3 text-sm leading-6 text-muted-foreground">Inicia sesión para consultar tus gastos e ingresos.</p>
           </div>
 
-          {notice && <div className="mb-5 rounded-xl border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{notice}</div>}
+          {notice && <div className="mb-5 rounded-xl border border-green-600/40 bg-green-500/10 px-3 py-2 text-sm text-green-700 dark:border-green-400/40 dark:text-green-300">{notice}</div>}
 
           <form onSubmit={submitLogin} className="flex flex-col gap-5">
             <label className="flex flex-col gap-2 text-sm font-medium">
@@ -135,12 +156,83 @@ function LoginView({ onLogin, isDark, onToggleTheme, notice }: { onLogin: (email
               <input required minLength={4} type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" />
             </label>
             {error && <p className="text-sm text-destructive">{error}</p>}
+            {resetMessage && <p className="text-sm text-primary">{resetMessage}</p>}
             <button type="submit" className="mt-2 inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground transition hover:opacity-90">
               <LockKeyhole className="size-4" /> Entrar a CostoApp
             </button>
           </form>
 
+          <button type="button" onClick={submitPasswordReset} disabled={isResetting} className="mt-5 w-full text-center text-sm font-medium text-primary underline-offset-4 hover:underline disabled:opacity-60">
+            {isResetting ? 'Enviando enlace...' : '¿Olvidaste tu contraseña?'}
+          </button>
+
           <p className="mt-6 text-center text-xs leading-5 text-muted-foreground">Usa una cuenta registrada para continuar.</p>
+        </section>
+      </div>
+    </main>
+  )
+}
+
+function PasswordRecoveryView({ onUpdatePassword, onBack, isDark, onToggleTheme }: { onUpdatePassword: (password: string) => Promise<void>; onBack: () => void; isDark: boolean; onToggleTheme: () => void }) {
+  const [password, setPassword] = useState('')
+  const [confirmation, setConfirmation] = useState('')
+  const [error, setError] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError('')
+    if (password.length < 6) {
+      setError('La contraseña debe tener al menos 6 caracteres.')
+      return
+    }
+    if (password !== confirmation) {
+      setError('Las contraseñas no coinciden.')
+      return
+    }
+
+    setIsSaving(true)
+    try {
+      await onUpdatePassword(password)
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : 'No se pudo actualizar la contraseña.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-background px-4 py-8 text-foreground sm:px-6">
+      <div className="w-full max-w-md">
+        <div className="mb-8 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground"><Receipt /></div>
+            <h1 className="font-serif text-xl font-semibold tracking-tight sm:text-2xl">CostoApp</h1>
+          </div>
+          <button onClick={onToggleTheme} className="rounded-lg border border-border p-2 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label={isDark ? 'Activar modo claro' : 'Activar modo oscuro'}>
+            {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+          </button>
+        </div>
+
+        <section className="rounded-3xl border border-border bg-card p-6 shadow-sm sm:p-8">
+          <p className="mb-2 font-mono text-xs uppercase tracking-[0.2em] text-primary">Recuperación de cuenta</p>
+          <h2 className="font-serif text-3xl font-semibold tracking-tight">Nueva contraseña</h2>
+          <p className="mt-3 text-sm leading-6 text-muted-foreground">Define una nueva contraseña para volver a acceder a tu cuenta.</p>
+          <form onSubmit={submit} className="mt-8 flex flex-col gap-5">
+            <label className="flex flex-col gap-2 text-sm font-medium">
+              Nueva contraseña
+              <input required minLength={6} type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" />
+            </label>
+            <label className="flex flex-col gap-2 text-sm font-medium">
+              Confirmar contraseña
+              <input required minLength={6} type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" />
+            </label>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <button type="submit" disabled={isSaving} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground transition hover:opacity-90 disabled:opacity-60">
+              <LockKeyhole className="size-4" /> {isSaving ? 'Guardando...' : 'Guardar contraseña'}
+            </button>
+          </form>
+          <button type="button" onClick={onBack} className="mt-5 w-full text-center text-sm font-medium text-primary underline-offset-4 hover:underline">Volver al inicio de sesión</button>
         </section>
       </div>
     </main>
@@ -165,6 +257,7 @@ export default function Page() {
   const [showFilters, setShowFilters] = useState(false)
   const [isDark, setIsDark] = useState(false)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
   const [authReady, setAuthReady] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -286,9 +379,13 @@ export default function Page() {
       setAuthReady(true)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsPasswordRecovery(true)
+        setIsLoggedIn(false)
+      }
       setUserId(session?.user.id ?? null)
-      setIsLoggedIn(Boolean(session))
+      if (event !== 'PASSWORD_RECOVERY') setIsLoggedIn(Boolean(session))
     })
 
     return () => {
@@ -668,6 +765,24 @@ export default function Page() {
     setLoginNotice('')
   }
 
+  async function resetPassword(email: string) {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    })
+    if (error) throw new Error('No se pudo enviar el correo de recuperación.')
+  }
+
+  async function updatePassword(password: string) {
+    const { error } = await supabase.auth.updateUser({ password })
+    if (error) throw new Error('No se pudo actualizar la contraseña.')
+
+    await supabase.auth.signOut()
+    setIsPasswordRecovery(false)
+    setIsLoggedIn(false)
+    setUserId(null)
+    setLoginNotice('Contraseña actualizada. Ya puedes iniciar sesión.')
+  }
+
   async function logout() {
     try {
       await supabase.auth.signOut()
@@ -679,7 +794,9 @@ export default function Page() {
     }
   }
 
-  if (!authReady || !isLoggedIn) return <LoginView onLogin={login} isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} notice={loginNotice} />
+  if (isPasswordRecovery) return <PasswordRecoveryView onUpdatePassword={updatePassword} onBack={() => setIsPasswordRecovery(false)} isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} />
+
+  if (!authReady || !isLoggedIn) return <LoginView onLogin={login} onResetPassword={resetPassword} isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} notice={loginNotice} />
 
   return (
     <main className="min-h-screen bg-background text-foreground">
