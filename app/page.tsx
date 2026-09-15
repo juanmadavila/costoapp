@@ -56,26 +56,31 @@ const expenseCategories = {
   Personal: ['Vivienda', 'Alimentación', 'Educación', 'Ropa', 'Transporte', 'Salud', 'Salidas', 'Otros'],
 }
 
-const incomeCategories = ['Salario', 'Freelance', 'Ventas', 'Inversiones', 'Bonos', 'Otros']
+const defaultIncomeCategories = ['Salario', 'Freelance', 'Ventas', 'Inversiones', 'Bonos', 'Otros']
+const EXPENSE_CATEGORIES_STORAGE_KEY = 'costoapp-expense-categories'
+const INCOME_CATEGORIES_STORAGE_KEY = 'costoapp-income-categories'
 
 const money = new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' })
 const dateFormat = new Intl.DateTimeFormat('es-ES', { day: '2-digit', month: 'short' })
 const today = () => new Date().toISOString().slice(0, 10)
 const currentMonth = () => today().slice(0, 7)
 const monthStart = (value: string) => `${value}-01`
-const SESSION_LOCK_MESSAGE = 'Usted ya inició sesión en otro navegador, solo puede mantener una sesión abierta.'
+const INACTIVITY_TIMEOUT_MS = 24 * 60 * 60 * 1000
+const LAST_SEEN_STORAGE_KEY = 'costoapp-last-seen'
 
-function getBrowserSessionId() {
-  const storageKey = 'costoapp-browser-session-id'
+function getLastSeenTimestamp() {
+  if (typeof window === 'undefined') return 0
 
-  if (typeof window === 'undefined') return ''
+  const saved = Number(window.localStorage.getItem(LAST_SEEN_STORAGE_KEY) ?? '0')
+  if (!Number.isFinite(saved) || saved <= 0) return 0
 
-  const existingSessionId = window.localStorage.getItem(storageKey)
-  if (existingSessionId) return existingSessionId
+  return saved
+}
 
-  const nextSessionId = crypto.randomUUID()
-  window.localStorage.setItem(storageKey, nextSessionId)
-  return nextSessionId
+function setLastSeenTimestamp() {
+  if (typeof window === 'undefined') return
+
+  window.localStorage.setItem(LAST_SEEN_STORAGE_KEY, String(Date.now()))
 }
 
 function LoginView({ onLogin, isDark, onToggleTheme, notice }: { onLogin: (email: string, password: string) => Promise<void>; isDark: boolean; onToggleTheme: () => void; notice?: string }) {
@@ -162,10 +167,47 @@ export default function Page() {
   const [authReady, setAuthReady] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [monthlyBudgets, setMonthlyBudgets] = useState<Partial<Record<ExpenseType, string>>>({})
+  const [monthlyIncomeGoal, setMonthlyIncomeGoal] = useState('')
   const [budgetEditor, setBudgetEditor] = useState<ExpenseType | null>(null)
   const [budgetForm, setBudgetForm] = useState('')
+  const [incomeGoalEditor, setIncomeGoalEditor] = useState(false)
+  const [incomeGoalForm, setIncomeGoalForm] = useState('')
+  const [expenseCategoryOptions, setExpenseCategoryOptions] = useState<Record<ExpenseType, string[]>>(() => {
+    if (typeof window === 'undefined') return expenseCategories
+
+    try {
+      const saved = window.localStorage.getItem(EXPENSE_CATEGORIES_STORAGE_KEY)
+      const parsed = saved ? JSON.parse(saved) : null
+      return parsed?.Profesional?.length && parsed?.Personal?.length ? parsed : expenseCategories
+    } catch {
+      return expenseCategories
+    }
+  })
+  const [isAddingExpenseCategory, setIsAddingExpenseCategory] = useState(false)
+  const [newExpenseCategory, setNewExpenseCategory] = useState('')
   const [form, setForm] = useState({ description: '', amount: '', date: today(), category: expenseCategories.Profesional[0], type: 'Profesional' as ExpenseType, project: '', notes: '' })
-  const [incomeForm, setIncomeForm] = useState({ description: '', amount: '', date: today(), category: incomeCategories[0], source: '', notes: '' })
+  const [incomeCategories, setIncomeCategories] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return defaultIncomeCategories
+
+    try {
+      const saved = window.localStorage.getItem(INCOME_CATEGORIES_STORAGE_KEY)
+      const parsed = saved ? JSON.parse(saved) : null
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : defaultIncomeCategories
+    } catch {
+      return defaultIncomeCategories
+    }
+  })
+  const [isAddingIncomeCategory, setIsAddingIncomeCategory] = useState(false)
+  const [newIncomeCategory, setNewIncomeCategory] = useState('')
+  const [incomeForm, setIncomeForm] = useState({ description: '', amount: '', date: today(), category: defaultIncomeCategories[0], source: '', notes: '' })
+
+  useEffect(() => {
+    window.localStorage.setItem(EXPENSE_CATEGORIES_STORAGE_KEY, JSON.stringify(expenseCategoryOptions))
+  }, [expenseCategoryOptions])
+
+  useEffect(() => {
+    window.localStorage.setItem(INCOME_CATEGORIES_STORAGE_KEY, JSON.stringify(incomeCategories))
+  }, [incomeCategories])
 
   const currentCategory = activeModule === 'gastos' ? expenseCategory : incomeCategory
 
@@ -176,40 +218,35 @@ export default function Page() {
   useEffect(() => {
     if (!userId) return
 
-    let isMounted = true
+    setLastSeenTimestamp()
 
-    async function validateSessionLock() {
-      const browserSessionId = getBrowserSessionId()
-      if (!browserSessionId) return
+    const interval = window.setInterval(() => {
+      const lastSeen = getLastSeenTimestamp()
+      const elapsed = Date.now() - lastSeen
 
-      const { data, error } = await supabase.rpc('bind_session_lock', {
-        p_user_id: userId,
-        p_browser_session_id: browserSessionId,
-      })
-
-      if (error) {
-        const message = String(error.message ?? '').toLowerCase()
-        if (message.includes('does not exist') || message.includes('not exist') || message.includes('relation') || message.includes('column')) {
-          return
-        }
+      if (elapsed > INACTIVITY_TIMEOUT_MS) {
+        void logout()
       }
+    }, 60 * 1000)
 
-      if (error || data !== true) {
-        if (!isMounted) return
-        setLoginNotice(SESSION_LOCK_MESSAGE)
-        setIsLoggedIn(false)
-        setUserId(null)
-        await supabase.auth.signOut()
-        return
-      }
+    return () => window.clearInterval(interval)
+  }, [userId])
+
+  useEffect(() => {
+    const handleActivity = () => {
+      setLastSeenTimestamp()
     }
 
-    void validateSessionLock()
+    window.addEventListener('pointerdown', handleActivity)
+    window.addEventListener('keydown', handleActivity)
+    window.addEventListener('scroll', handleActivity, { passive: true })
 
     return () => {
-      isMounted = false
+      window.removeEventListener('pointerdown', handleActivity)
+      window.removeEventListener('keydown', handleActivity)
+      window.removeEventListener('scroll', handleActivity)
     }
-  }, [userId])
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -245,11 +282,13 @@ export default function Page() {
       supabase.from('expenses').select('id, spent_on, description, category, type, amount, project, notes').eq('user_id', userId).order('spent_on', { ascending: false }),
       supabase.from('incomes').select('id, received_on, description, category, amount, source, notes').eq('user_id', userId).order('received_on', { ascending: false }),
       supabase.from('monthly_budgets').select('type, amount').eq('user_id', userId).eq('month', monthStart(month)),
+      supabase.from('monthly_income_goals').select('amount').eq('user_id', userId).eq('month', monthStart(month)).maybeSingle(),
     ])
-      .then(([expensesResult, incomesResult, budgetsResult]) => {
+      .then(([expensesResult, incomesResult, budgetsResult, incomeGoalResult]) => {
         if (expensesResult.error) throw expensesResult.error
         if (incomesResult.error) throw incomesResult.error
         if (budgetsResult.error) throw budgetsResult.error
+        if (incomeGoalResult.error) throw incomeGoalResult.error
 
         setExpenses(
           (expensesResult.data ?? []).map((expense) => ({
@@ -279,11 +318,13 @@ export default function Page() {
         setMonthlyBudgets(
           Object.fromEntries((budgetsResult.data ?? []).map((budget) => [budget.type, String(budget.amount)])) as Partial<Record<ExpenseType, string>>,
         )
+        setMonthlyIncomeGoal(incomeGoalResult.data ? String(incomeGoalResult.data.amount) : '')
       })
       .catch(() => {
         setExpenses([])
         setIncomes([])
         setMonthlyBudgets({})
+        setMonthlyIncomeGoal('')
       })
       .finally(() => setIsLoading(false))
   }, [userId, month])
@@ -334,6 +375,8 @@ export default function Page() {
   const personalBudget = Number(monthlyBudgets.Personal) || 0
   const professionalPercentage = professionalBudget > 0 ? professionalTotal / professionalBudget * 100 : 0
   const personalPercentage = personalBudget > 0 ? personalTotal / personalBudget * 100 : 0
+  const incomeGoal = Number(monthlyIncomeGoal) || 0
+  const incomeGoalPercentage = incomeGoal > 0 ? incomeTotal / incomeGoal * 100 : 0
 
   function setActiveCategory(value: string) {
     if (activeModule === 'gastos') {
@@ -346,14 +389,34 @@ export default function Page() {
   function openNewExpense() {
     setEditing(null)
     const type = activeType === 'Personal' ? 'Personal' : 'Profesional'
-    setForm({ description: '', amount: '', date: today(), category: expenseCategories[type][0], type, project: '', notes: '' })
+    setForm({ description: '', amount: '', date: today(), category: expenseCategoryOptions[type][0], type, project: '', notes: '' })
+    setIsAddingExpenseCategory(false)
+    setNewExpenseCategory('')
     setIsFormOpen(true)
   }
 
   function openEditExpense(expense: Expense) {
     setEditing(expense)
     setForm({ description: expense.description, amount: String(expense.amount), date: expense.date, category: expense.category, type: expense.type, project: expense.project ?? '', notes: expense.notes ?? '' })
+    setIsAddingExpenseCategory(false)
+    setNewExpenseCategory('')
     setIsFormOpen(true)
+  }
+
+  function addCustomExpenseCategory() {
+    const value = newExpenseCategory.trim().replace(/\s+/g, ' ')
+    if (!value) return
+
+    const category = value.charAt(0).toUpperCase() + value.slice(1)
+    setExpenseCategoryOptions((current) => ({
+      ...current,
+      [form.type]: current[form.type].some((item) => item.toLowerCase() === category.toLowerCase())
+        ? current[form.type]
+        : [...current[form.type], category],
+    }))
+    setForm((current) => ({ ...current, category }))
+    setIsAddingExpenseCategory(false)
+    setNewExpenseCategory('')
   }
 
   async function saveExpense(event: React.FormEvent) {
@@ -418,16 +481,85 @@ export default function Page() {
     setBudgetEditor(null)
   }
 
+  async function clearBudget() {
+    if (!userId || !budgetEditor) return
+
+    const result = await supabase.from('monthly_budgets').delete().eq('user_id', userId).eq('month', monthStart(month)).eq('type', budgetEditor)
+    if (result.error) return
+
+    setMonthlyBudgets((current) => {
+      const next = { ...current }
+      delete next[budgetEditor]
+      return next
+    })
+    setBudgetForm('')
+    setBudgetEditor(null)
+  }
+
+  function openIncomeGoalEditor() {
+    setIncomeGoalEditor(true)
+    setIncomeGoalForm(monthlyIncomeGoal)
+  }
+
+  async function saveIncomeGoal(event: React.FormEvent) {
+    event.preventDefault()
+    if (!userId || !incomeGoalForm || Number(incomeGoalForm) <= 0) return
+
+    const result = await supabase.from('monthly_income_goals').upsert(
+      { user_id: userId, month: monthStart(month), amount: Number(incomeGoalForm) },
+      { onConflict: 'user_id,month' },
+    )
+
+    if (result.error) return
+
+    setMonthlyIncomeGoal(incomeGoalForm)
+    setIncomeGoalEditor(false)
+  }
+
+  async function clearIncomeGoal() {
+    if (!userId) return
+
+    const result = await supabase.from('monthly_income_goals').delete().eq('user_id', userId).eq('month', monthStart(month))
+    if (result.error) return
+
+    setMonthlyIncomeGoal('')
+    setIncomeGoalForm('')
+    setIncomeGoalEditor(false)
+  }
+
   function openNewIncome() {
     setEditingIncome(null)
-    setIncomeForm({ description: '', amount: '', date: today(), category: incomeCategories[0], source: '', notes: '' })
+    setIncomeForm({ description: '', amount: '', date: today(), category: incomeCategories[0] ?? defaultIncomeCategories[0], source: '', notes: '' })
+    setIsAddingIncomeCategory(false)
+    setNewIncomeCategory('')
     setIsIncomeFormOpen(true)
   }
 
   function openEditIncome(income: Income) {
     setEditingIncome(income)
     setIncomeForm({ description: income.description, amount: String(income.amount), date: income.date, category: income.category, source: income.source ?? '', notes: income.notes ?? '' })
+    setIsAddingIncomeCategory(false)
+    setNewIncomeCategory('')
     setIsIncomeFormOpen(true)
+  }
+
+  function addCustomIncomeCategory() {
+    const value = newIncomeCategory.trim()
+    if (!value) return
+
+    const normalized = value.replace(/\s+/g, ' ').trim()
+    const category = normalized.charAt(0).toUpperCase() + normalized.slice(1)
+
+    setIncomeCategories((current) => {
+      if (current.some((item) => item.toLowerCase() === category.toLowerCase())) {
+        return current
+      }
+      return [...current, category]
+    })
+
+    setIncomeForm((current) => ({ ...current, category }))
+    setIsAddingIncomeCategory(false)
+    setNewIncomeCategory('')
   }
 
   async function saveIncome(event: React.FormEvent) {
@@ -471,48 +603,22 @@ export default function Page() {
   }
 
   async function login(email: string, password: string) {
-    const { data: loginData, error } = await supabase.auth.signInWithPassword({ email, password })
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) throw new Error('Correo o contraseña incorrectos.')
 
-    const browserSessionId = getBrowserSessionId()
-    const { data, error: lockError } = await supabase.rpc('acquire_session_lock', {
-      p_user_id: loginData.user.id,
-      p_browser_session_id: browserSessionId,
-    })
-
-    if (lockError) {
-      const message = String(lockError.message ?? '').toLowerCase()
-      if (message.includes('does not exist') || message.includes('not exist') || message.includes('relation') || message.includes('column')) {
-        setLoginNotice('')
-        return
-      }
-    }
-
-    if (lockError || data !== true) {
-      await supabase.auth.signOut()
-      setLoginNotice(SESSION_LOCK_MESSAGE)
-      throw new Error(SESSION_LOCK_MESSAGE)
-    }
-
+    setLastSeenTimestamp()
     setLoginNotice('')
   }
 
   async function logout() {
-    const currentUserId = userId ?? null
-    if (currentUserId) {
-      const browserSessionId = getBrowserSessionId()
-      try {
-        await supabase.rpc('release_session_lock', {
-          p_user_id: currentUserId,
-          p_browser_session_id: browserSessionId,
-        })
-      } catch {
-        // Ignorar errores del bloqueo de sesión si no existe la función o el registro ya fue limpiado.
-      }
+    try {
+      await supabase.auth.signOut()
+    } finally {
+      window.localStorage.removeItem(LAST_SEEN_STORAGE_KEY)
+      setLoginNotice('')
+      setIsLoggedIn(false)
+      setUserId(null)
     }
-
-    await supabase.auth.signOut()
-    setLoginNotice('')
   }
 
   if (!authReady || !isLoggedIn) return <LoginView onLogin={login} isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} notice={loginNotice} />
@@ -534,9 +640,39 @@ export default function Page() {
                 Presupuesto de gasto mensual objetivo
                 <input autoFocus required type="number" min="0.01" step="0.01" value={budgetForm} onChange={(event) => setBudgetForm(event.target.value)} className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" />
               </label>
-              <div className="flex justify-end gap-2">
-                <button type="button" onClick={() => setBudgetEditor(null)} className="rounded-xl border border-border px-4 py-2 text-sm font-medium hover:bg-muted">Cancelar</button>
-                <button type="submit" className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">Guardar límite</button>
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+                <button type="button" onClick={clearBudget} className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/15">Eliminar límite</button>
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setBudgetEditor(null)} className="rounded-xl border border-border px-4 py-2 text-sm font-medium hover:bg-muted">Cancelar</button>
+                  <button type="submit" className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">Guardar límite</button>
+                </div>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {incomeGoalEditor && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-foreground/35 p-0 sm:items-center sm:p-4">
+          <section role="dialog" aria-modal="true" aria-labelledby="income-goal-title" className="w-full rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-md sm:rounded-2xl">
+            <div className="mb-6 flex items-start justify-between">
+              <div>
+                <p className="font-mono text-xs uppercase tracking-widest text-primary">Objetivo mensual</p>
+                <h2 id="income-goal-title" className="mt-1 font-serif text-2xl font-semibold">Meta de ingresos</h2>
+              </div>
+              <button type="button" onClick={() => setIncomeGoalEditor(false)} className="rounded-lg p-2 text-muted-foreground hover:bg-muted" aria-label="Cerrar"><X /></button>
+            </div>
+            <form onSubmit={saveIncomeGoal} className="flex flex-col gap-4">
+              <label className="flex flex-col gap-2 text-sm font-medium">
+                Monto objetivo de ingreso mensual
+                <input autoFocus required type="number" min="0.01" step="0.01" value={incomeGoalForm} onChange={(event) => setIncomeGoalForm(event.target.value)} className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" />
+              </label>
+              <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+                <button type="button" onClick={clearIncomeGoal} className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm font-medium text-destructive hover:bg-destructive/15">Eliminar objetivo</button>
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setIncomeGoalEditor(false)} className="rounded-xl border border-border px-4 py-2 text-sm font-medium hover:bg-muted">Cancelar</button>
+                  <button type="submit" className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">Guardar objetivo</button>
+                </div>
               </div>
             </form>
           </section>
@@ -573,12 +709,40 @@ export default function Page() {
 
               <label className="flex flex-col gap-2 text-sm font-medium">
                 Categoría
-                <select value={incomeForm.category} onChange={(event) => setIncomeForm({ ...incomeForm, category: event.target.value })} className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring">
+                <select value={isAddingIncomeCategory ? '__new__' : incomeForm.category} onChange={(event) => {
+                  const nextValue = event.target.value
+                  if (nextValue === '__new__') {
+                    setIsAddingIncomeCategory(true)
+                    return
+                  }
+
+                  setIsAddingIncomeCategory(false)
+                  setIncomeForm({ ...incomeForm, category: nextValue })
+                }} className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring">
                   {incomeCategories.map((item) => (
                     <option key={item} value={item}>{item}</option>
                   ))}
+                  <option value="__new__">+ Agregar categoría</option>
                 </select>
               </label>
+
+              {isAddingIncomeCategory && (
+                <div className="flex flex-col gap-2 rounded-xl border border-dashed border-border bg-muted/40 p-3">
+                  <label className="flex flex-col gap-2 text-sm font-medium">
+                    Nueva categoría
+                    <div className="flex gap-2">
+                      <input
+                        autoFocus
+                        value={newIncomeCategory}
+                        onChange={(event) => setNewIncomeCategory(event.target.value)}
+                        placeholder="Ej. Dividendos"
+                        className="flex-1 rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring"
+                      />
+                      <button type="button" onClick={addCustomIncomeCategory} className="rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">Agregar</button>
+                    </div>
+                  </label>
+                </div>
+              )}
 
               <label className="flex flex-col gap-2 text-sm font-medium">
                 Fuente
@@ -707,15 +871,15 @@ export default function Page() {
             </section>
 
             <section className="mb-6 grid gap-4 md:grid-cols-[1.4fr_1fr_1fr]">
-              <div className="rounded-2xl bg-primary p-6 text-primary-foreground">
+              <div className="rounded-2xl bg-red-100 p-6 text-red-950 dark:bg-red-950/50 dark:text-red-100">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-sm text-primary-foreground/70">Gasto total</p>
+                    <p className="text-sm text-red-950/70 dark:text-red-100/70">Gasto total</p>
                     <p className="mt-2 font-serif text-4xl font-semibold">{money.format(expenseTotal)}</p>
                   </div>
                   <CircleDollarSign className="size-7 shrink-0 opacity-70" />
                 </div>
-                <div className="mt-8 flex items-center gap-2 text-sm text-primary-foreground/75">
+                <div className="mt-8 flex items-center gap-2 text-sm text-red-950/75 dark:text-red-100/75">
                   <TrendingUp className="size-4" /> Este mes · {filteredExpenses.length} movimientos
                 </div>
               </div>
@@ -802,7 +966,7 @@ export default function Page() {
                     <Tag className="size-4 shrink-0 text-muted-foreground" />
                     <select value={expenseCategory} onChange={(event) => setExpenseCategory(event.target.value)} className="rounded-lg border border-input bg-background px-3 py-2 text-sm">
                       <option value="Todas">Todas</option>
-                      {Array.from(new Set(Object.values(expenseCategories).flat())).map((item) => (
+                      {Array.from(new Set(Object.values(expenseCategoryOptions).flat())).map((item) => (
                         <option key={item} value={item}>{item}</option>
                       ))}
                     </select>
@@ -869,11 +1033,17 @@ export default function Page() {
 
               <div className="rounded-2xl border border-border bg-card p-6">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm text-muted-foreground">Gastos del mes</p>
-                  <ArrowDownUp className="size-5 text-chart-3" />
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm text-muted-foreground">Meta de ingresos</p>
+                    <button type="button" onClick={openIncomeGoalEditor} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Editar objetivo de ingresos" title="Editar objetivo"><Pencil className="size-4" /></button>
+                  </div>
+                  <TrendingUp className="size-5 text-primary" />
                 </div>
-                <p className="mt-4 font-serif text-3xl font-semibold">{money.format(expenseTotal)}</p>
-                <p className="mt-2 text-xs text-muted-foreground">Total de salidas registradas</p>
+                <p className="mt-4 font-serif text-3xl font-semibold">{incomeGoal > 0 ? money.format(incomeGoal) : 'Sin meta'}</p>
+                <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-muted">
+                  <div className={`h-full rounded-full ${incomeGoalPercentage > 100 ? 'bg-red-500' : 'bg-primary'}`} style={{ width: `${Math.min(incomeGoalPercentage, 100)}%` }} />
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">{incomeGoal > 0 ? `${Math.round(incomeGoalPercentage)}% del objetivo` : 'Define un objetivo mensual'}</p>
               </div>
             </section>
 
@@ -1005,7 +1175,8 @@ export default function Page() {
                       key={item}
                       type="button"
                       onClick={() => {
-                        setForm({ ...form, type: item, category: expenseCategories[item][0], project: item === 'Profesional' ? form.project : '' })
+                        setForm({ ...form, type: item, category: expenseCategoryOptions[item][0], project: item === 'Profesional' ? form.project : '' })
+                        setIsAddingExpenseCategory(false)
                       }}
                       className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${form.type === item ? 'border-primary bg-primary/10 text-primary' : 'border-input text-muted-foreground hover:bg-muted'}`}
                     >
@@ -1017,12 +1188,40 @@ export default function Page() {
 
               <label className="flex flex-col gap-2 text-sm font-medium">
                 Categoría
-                <select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring">
-                  {expenseCategories[form.type].map((item) => (
+                <select value={isAddingExpenseCategory ? '__new__' : form.category} onChange={(event) => {
+                  const nextValue = event.target.value
+                  if (nextValue === '__new__') {
+                    setIsAddingExpenseCategory(true)
+                    return
+                  }
+
+                  setIsAddingExpenseCategory(false)
+                  setForm({ ...form, category: nextValue })
+                }} className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring">
+                  {expenseCategoryOptions[form.type].map((item) => (
                     <option key={item} value={item}>{item}</option>
                   ))}
+                  <option value="__new__">+ Agregar categoría</option>
                 </select>
               </label>
+
+              {isAddingExpenseCategory && (
+                <div className="flex flex-col gap-2 rounded-xl border border-dashed border-border bg-muted/40 p-3">
+                  <label className="flex flex-col gap-2 text-sm font-medium">
+                    Nueva categoría
+                    <div className="flex gap-2">
+                      <input
+                        autoFocus
+                        value={newExpenseCategory}
+                        onChange={(event) => setNewExpenseCategory(event.target.value)}
+                        placeholder="Ej. Suscripciones"
+                        className="flex-1 rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring"
+                      />
+                      <button type="button" onClick={addCustomExpenseCategory} className="rounded-xl bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">Agregar</button>
+                    </div>
+                  </label>
+                </div>
+              )}
 
               {form.type === 'Profesional' && (
                 <label className="flex flex-col gap-2 text-sm font-medium">
