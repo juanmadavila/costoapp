@@ -10,9 +10,16 @@ create table public.expenses (
   amount numeric(12, 2) not null check (amount > 0),
   project text,
   notes text,
+  installment_group_id uuid,
+  installment_number integer,
+  installment_count integer,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.expenses add column if not exists installment_group_id uuid;
+alter table public.expenses add column if not exists installment_number integer;
+alter table public.expenses add column if not exists installment_count integer;
 
 create table public.incomes (
   id uuid primary key default gen_random_uuid(),

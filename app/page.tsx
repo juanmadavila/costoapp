@@ -40,6 +40,23 @@ type Expense = {
   amount: number
   project?: string
   notes?: string
+  installmentGroupId?: string
+  installmentNumber?: number
+  installmentCount?: number
+}
+
+type ExpenseRow = {
+  id: string
+  spent_on: string
+  description: string
+  category: string
+  type: string
+  amount: number | string
+  project: string | null
+  notes: string | null
+  installment_group_id: string | null
+  installment_number: number | null
+  installment_count: number | null
 }
 
 type Income = {
@@ -71,6 +88,39 @@ const INACTIVITY_TIMEOUT_MS = 24 * 60 * 60 * 1000
 const LAST_SEEN_STORAGE_KEY = 'costoapp-last-seen'
 const expenseCategoriesStorageKey = (userId: string) => `${EXPENSE_CATEGORIES_STORAGE_KEY}:${userId}`
 const incomeCategoriesStorageKey = (userId: string) => `${INCOME_CATEGORIES_STORAGE_KEY}:${userId}`
+
+function addMonthsToDate(date: string, monthsToAdd: number) {
+  const [year, month, day] = date.split('-').map(Number)
+  const targetMonth = new Date(year, month - 1 + monthsToAdd, 1)
+  const lastDay = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0).getDate()
+  const targetDay = Math.min(day, lastDay)
+
+  return `${targetMonth.getFullYear()}-${String(targetMonth.getMonth() + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`
+}
+
+function splitAmountIntoInstallments(amount: number, count: number) {
+  const totalCents = Math.round(amount * 100)
+  const baseCents = Math.floor(totalCents / count)
+  const remainingCents = totalCents % count
+
+  return Array.from({ length: count }, (_, index) => (baseCents + (index < remainingCents ? 1 : 0)) / 100)
+}
+
+function mapExpenseRow(expense: ExpenseRow): Expense {
+  return {
+    id: expense.id,
+    date: expense.spent_on,
+    description: expense.description,
+    category: expense.category,
+    type: expense.type as ExpenseType,
+    amount: Number(expense.amount),
+    project: expense.project ?? undefined,
+    notes: expense.notes ?? undefined,
+    installmentGroupId: expense.installment_group_id ?? undefined,
+    installmentNumber: expense.installment_number ?? undefined,
+    installmentCount: expense.installment_count ?? undefined,
+  }
+}
 
 function getLastSeenTimestamp() {
   if (typeof window === 'undefined') return 0
@@ -274,6 +324,8 @@ export default function Page() {
   const [categoryStorageUserId, setCategoryStorageUserId] = useState<string | null>(null)
   const [isAddingExpenseCategory, setIsAddingExpenseCategory] = useState(false)
   const [newExpenseCategory, setNewExpenseCategory] = useState('')
+  const [isInstallmentPurchase, setIsInstallmentPurchase] = useState(false)
+  const [installmentCount, setInstallmentCount] = useState('3')
   const [form, setForm] = useState({ description: '', amount: '', date: today(), category: expenseCategories.Profesional[0], type: 'Profesional' as ExpenseType, project: '', notes: '' })
   const [incomeCategories, setIncomeCategories] = useState<string[]>(() => {
     return defaultIncomeCategories
@@ -427,7 +479,7 @@ export default function Page() {
 
     setIsLoading(true)
     Promise.all([
-      supabase.from('expenses').select('id, spent_on, description, category, type, amount, project, notes').eq('user_id', userId).order('spent_on', { ascending: false }),
+      supabase.from('expenses').select('id, spent_on, description, category, type, amount, project, notes, installment_group_id, installment_number, installment_count').eq('user_id', userId).order('spent_on', { ascending: false }),
       supabase.from('incomes').select('id, received_on, description, category, amount, source, notes').eq('user_id', userId).order('received_on', { ascending: false }),
       supabase.from('monthly_budgets').select('type, amount').eq('user_id', userId).eq('month', monthStart(month)),
       supabase.from('monthly_income_goals').select('amount').eq('user_id', userId).eq('month', monthStart(month)).maybeSingle(),
@@ -439,16 +491,7 @@ export default function Page() {
         if (incomeGoalResult.error) throw incomeGoalResult.error
 
         setExpenses(
-          (expensesResult.data ?? []).map((expense) => ({
-            id: expense.id,
-            date: expense.spent_on,
-            description: expense.description,
-            category: expense.category,
-            type: expense.type as ExpenseType,
-            amount: Number(expense.amount),
-            project: expense.project ?? undefined,
-            notes: expense.notes ?? undefined,
-          })),
+          (expensesResult.data ?? []).map((expense) => mapExpenseRow(expense as ExpenseRow)),
         )
 
         setExpenseCategoryOptions((current) => {
@@ -566,6 +609,8 @@ export default function Page() {
 
   function openNewExpense() {
     setEditing(null)
+    setIsInstallmentPurchase(false)
+    setInstallmentCount('3')
     const type = activeType === 'Personal' ? 'Personal' : 'Profesional'
     setForm({ description: '', amount: '', date: today(), category: expenseCategoryOptions[type][0], type, project: '', notes: '' })
     setIsAddingExpenseCategory(false)
@@ -575,6 +620,7 @@ export default function Page() {
 
   function openEditExpense(expense: Expense) {
     setEditing(expense)
+    setIsInstallmentPurchase(false)
     setForm({ description: expense.description, amount: String(expense.amount), date: expense.date, category: expense.category, type: expense.type, project: expense.project ?? '', notes: expense.notes ?? '' })
     setIsAddingExpenseCategory(false)
     setNewExpenseCategory('')
@@ -601,34 +647,56 @@ export default function Page() {
     event.preventDefault()
     if (!userId || !form.description || !form.amount || Number(form.amount) <= 0) return
 
+    const count = Number(installmentCount)
+    if (!editing && isInstallmentPurchase && (
+      !Number.isInteger(count)
+      || count < 2
+      || count > 48
+      || Math.round(Number(form.amount) * 100) < count
+    )) return
+
     const values = {
-      spent_on: form.date,
       description: form.description.trim(),
       category: form.category,
       type: form.type,
-      amount: Number(form.amount),
       project: form.type === 'Profesional' ? form.project.trim() || null : null,
       notes: form.notes.trim() || null,
     }
 
-    const result = editing
-      ? await supabase.from('expenses').update(values).eq('id', editing.id).eq('user_id', userId).select('id, spent_on, description, category, type, amount, project, notes').single()
-      : await supabase.from('expenses').insert({ ...values, user_id: userId }).select('id, spent_on, description, category, type, amount, project, notes').single()
+    let savedExpenses: Expense[]
+    if (editing) {
+      const result = await supabase.from('expenses').update({
+        ...values,
+        spent_on: form.date,
+        amount: Number(form.amount),
+      }).eq('id', editing.id).eq('user_id', userId)
+        .select('id, spent_on, description, category, type, amount, project, notes, installment_group_id, installment_number, installment_count')
+        .single()
 
-    if (result.error) return
+      if (result.error) return
+      savedExpenses = [mapExpenseRow(result.data as ExpenseRow)]
+    } else {
+      const groupId = isInstallmentPurchase ? crypto.randomUUID() : null
+      const amounts = isInstallmentPurchase ? splitAmountIntoInstallments(Number(form.amount), count) : [Number(form.amount)]
+      const rows = amounts.map((amount, index) => ({
+        ...values,
+        spent_on: addMonthsToDate(form.date, index),
+        amount,
+        user_id: userId,
+        installment_group_id: groupId,
+        installment_number: isInstallmentPurchase ? index + 1 : null,
+        installment_count: isInstallmentPurchase ? count : null,
+      }))
+      const result = await supabase.from('expenses').insert(rows)
+        .select('id, spent_on, description, category, type, amount, project, notes, installment_group_id, installment_number, installment_count')
 
-    const saved: Expense = {
-      id: result.data.id,
-      date: result.data.spent_on,
-      description: result.data.description,
-      category: result.data.category,
-      type: result.data.type as ExpenseType,
-      amount: Number(result.data.amount),
-      project: result.data.project ?? undefined,
-      notes: result.data.notes ?? undefined,
+      if (result.error) return
+      savedExpenses = (result.data ?? []).map((expense) => mapExpenseRow(expense as ExpenseRow))
     }
 
-    setExpenses((current) => editing ? current.map((expense) => expense.id === saved.id ? saved : expense) : [saved, ...current])
+    setExpenses((current) => editing
+      ? current.map((expense) => expense.id === editing.id ? savedExpenses[0] : expense)
+      : [...savedExpenses, ...current])
     setIsFormOpen(false)
   }
 
@@ -1203,6 +1271,7 @@ export default function Page() {
                             <p className="truncate font-medium text-foreground">{expense.description}</p>
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                               <span className="rounded-full border border-border px-2 py-0.5">{expense.category}</span>
+                              {expense.installmentNumber && expense.installmentCount && <span>Cuota {expense.installmentNumber} de {expense.installmentCount}</span>}
                               <span>{dateFormat.format(new Date(`${expense.date}T00:00:00`))}</span>
                               {expense.project && <span>{expense.project}</span>}
                             </div>
@@ -1375,8 +1444,8 @@ export default function Page() {
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <label className="flex flex-col gap-2 text-sm font-medium">
-                  Importe ($)
-                  <input required type="number" min="0.01" step="0.01" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} placeholder="0,00" className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" />
+                  {editing?.installmentGroupId ? 'Importe de esta cuota ($)' : isInstallmentPurchase ? 'Importe total de la compra ($)' : 'Importe ($)'}
+                  <input required type="number" min={isInstallmentPurchase ? (Math.max(2, Number(installmentCount) || 2) * 0.01).toFixed(2) : '0.01'} step="0.01" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} placeholder="0,00" className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" />
                 </label>
                 <label className="flex flex-col gap-2 text-sm font-medium">
                   Fecha
@@ -1447,6 +1516,28 @@ export default function Page() {
                 </label>
               )}
 
+              {!editing && (
+                <div className="rounded-xl border border-border p-3">
+                  <label className="flex items-center gap-3 text-sm font-medium">
+                    <input type="checkbox" checked={isInstallmentPurchase} onChange={(event) => setIsInstallmentPurchase(event.target.checked)} className="size-4 accent-primary" />
+                    Compra en cuotas mensuales
+                  </label>
+                  {isInstallmentPurchase && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="flex flex-col gap-2 text-sm font-medium">
+                        Cantidad de cuotas
+                        <input required type="number" min="2" max="48" step="1" value={installmentCount} onChange={(event) => setInstallmentCount(event.target.value)} className="rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" />
+                      </label>
+                      {Number(form.amount) > 0 && Number(installmentCount) >= 2 && Number(installmentCount) <= 48 && (
+                        <p className="self-end pb-3 text-sm text-muted-foreground">
+                          {money.format(splitAmountIntoInstallments(Number(form.amount), Number(installmentCount))[0])} por mes, desde la fecha elegida.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <label className="flex flex-col gap-2 text-sm font-medium">
                 Notas
                 <textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="Observaciones adicionales" className="min-h-24 rounded-xl border border-input bg-background px-3 py-3 font-normal outline-none focus:ring-2 focus:ring-ring" />
@@ -1454,7 +1545,7 @@ export default function Page() {
 
               <div className="flex justify-end gap-2 pt-2">
                 <button type="button" onClick={() => setIsFormOpen(false)} className="rounded-xl border border-border px-4 py-2 text-sm font-medium hover:bg-muted">Cancelar</button>
-                <button type="submit" className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">Guardar gasto</button>
+                <button type="submit" className="rounded-xl bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:opacity-90">{isInstallmentPurchase ? 'Guardar cuotas' : 'Guardar gasto'}</button>
               </div>
             </form>
           </div>
