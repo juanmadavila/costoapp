@@ -728,17 +728,12 @@ export default function Page() {
     setExpenses((current) => current.filter(
       (item) => item.installmentGroupId !== groupId,
     ))
-    setDeleteExpenseTarget(null)
   }
 
   async function confirmDeleteExpense(expense: Expense, mode: 'single' | 'all') {
     if (!userId || !expense) return
 
-    const question = mode === 'single'
-      ? `¿Eliminar esta cuota de "${expense.description}"?`
-      : `¿Eliminar todas las cuotas de "${expense.description}"?`
-
-    if (!window.confirm(question)) return
+    setDeleteExpenseTarget(null)
 
     if (mode === 'single') {
       await deleteExpense(expense.id)
