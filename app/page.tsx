@@ -324,6 +324,7 @@ export default function Page() {
   const [categoryStorageUserId, setCategoryStorageUserId] = useState<string | null>(null)
   const [isAddingExpenseCategory, setIsAddingExpenseCategory] = useState(false)
   const [newExpenseCategory, setNewExpenseCategory] = useState('')
+  const [deleteExpenseTarget, setDeleteExpenseTarget] = useState<Expense | null>(null)
   const [isInstallmentPurchase, setIsInstallmentPurchase] = useState(false)
   const [installmentCount, setInstallmentCount] = useState('3')
   const [form, setForm] = useState({ description: '', amount: '', date: today(), category: expenseCategories.Profesional[0], type: 'Profesional' as ExpenseType, project: '', notes: '' })
@@ -701,10 +702,52 @@ export default function Page() {
   }
 
   async function deleteExpense(id: string) {
-    if (!userId || !window.confirm('¿Eliminar este gasto?')) return
+    if (!userId) return
 
     const result = await supabase.from('expenses').delete().eq('id', id).eq('user_id', userId)
-    if (!result.error) setExpenses((current) => current.filter((expense) => expense.id !== id))
+    if (result.error) {
+      window.alert('No se pudo eliminar el gasto. Inténtalo de nuevo.')
+      return
+    }
+
+    setExpenses((current) => current.filter((expense) => expense.id !== id))
+  }
+
+  async function deleteInstallmentGroup(groupId: string) {
+    if (!userId) return
+
+    const result = await supabase.from('expenses').delete()
+      .eq('installment_group_id', groupId)
+      .eq('user_id', userId)
+
+    if (result.error) {
+      window.alert('No se pudieron eliminar las cuotas. Inténtalo de nuevo.')
+      return
+    }
+
+    setExpenses((current) => current.filter(
+      (item) => item.installmentGroupId !== groupId,
+    ))
+    setDeleteExpenseTarget(null)
+  }
+
+  async function confirmDeleteExpense(expense: Expense, mode: 'single' | 'all') {
+    if (!userId || !expense) return
+
+    const question = mode === 'single'
+      ? `¿Eliminar esta cuota de "${expense.description}"?`
+      : `¿Eliminar todas las cuotas de "${expense.description}"?`
+
+    if (!window.confirm(question)) return
+
+    if (mode === 'single') {
+      await deleteExpense(expense.id)
+      return
+    }
+
+    if (expense.installmentGroupId) {
+      await deleteInstallmentGroup(expense.installmentGroupId)
+    }
   }
 
   function openBudgetEditor(type: ExpenseType) {
@@ -897,15 +940,41 @@ export default function Page() {
 
   return (
     <main className="min-h-screen bg-background text-foreground">
+      {deleteExpenseTarget && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-foreground/35 p-0 sm:items-center sm:p-4">
+          <section role="dialog" aria-modal="true" aria-labelledby="delete-expense-title" className="w-full rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-md sm:rounded-2xl">
+            <div className="mb-5">
+              <h2 id="delete-expense-title" className="font-serif text-2xl font-semibold leading-tight">{deleteExpenseTarget.description}</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {deleteExpenseTarget.installmentGroupId && deleteExpenseTarget.installmentCount
+                  ? `Esta cuota pertenece a un grupo de ${deleteExpenseTarget.installmentCount}. ¿Qué deseas eliminar?`
+                  : '¿Seguro que quieres eliminar este gasto?'}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setDeleteExpenseTarget(null)} className="rounded-xl border border-input px-4 py-2 text-sm font-medium text-muted-foreground transition hover:bg-muted">Cancelar</button>
+              {deleteExpenseTarget.installmentGroupId && deleteExpenseTarget.installmentCount ? (
+                <>
+                  <button type="button" onClick={() => { void confirmDeleteExpense(deleteExpenseTarget, 'single'); }} className="rounded-xl border border-input px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted">Esta cuota</button>
+                  <button type="button" onClick={() => { void confirmDeleteExpense(deleteExpenseTarget, 'all'); }} className="rounded-xl bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition hover:opacity-90">Todas las cuotas</button>
+                </>
+              ) : (
+                <button type="button" onClick={() => { void confirmDeleteExpense(deleteExpenseTarget, 'single'); }} className="rounded-xl bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition hover:opacity-90">Eliminar</button>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
       {budgetEditor && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-foreground/35 p-0 sm:items-center sm:p-4">
-          <section role="dialog" aria-modal="true" aria-labelledby="budget-title" className="w-full rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-md sm:rounded-2xl">
-            <div className="mb-6 flex items-start justify-between">
+          <section role="dialog" aria-modal="true" aria-labelledby="budget-title" className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-md sm:rounded-2xl">
+            <div className="mb-5 flex items-start justify-between">
               <div>
-                <p className="font-mono text-xs uppercase tracking-widest text-primary">Límite mensual</p>
-                <h2 id="budget-title" className="mt-1 font-serif text-2xl font-semibold">Presupuesto {budgetEditor}</h2>
+                <h2 id="budget-title" className="font-serif text-2xl font-semibold leading-tight">Presupuesto {budgetEditor}</h2>
               </div>
-              <button type="button" onClick={() => setBudgetEditor(null)} className="rounded-lg p-2 text-muted-foreground hover:bg-muted" aria-label="Cerrar"><X /></button>
+              <button type="button" onClick={() => setBudgetEditor(null)} className="rounded-lg p-3 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Cerrar"><X className="size-5" /></button>
             </div>
             <form onSubmit={saveBudget} className="flex flex-col gap-4">
               <label className="flex flex-col gap-2 text-sm font-medium">
@@ -926,13 +995,12 @@ export default function Page() {
 
       {incomeGoalEditor && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-foreground/35 p-0 sm:items-center sm:p-4">
-          <section role="dialog" aria-modal="true" aria-labelledby="income-goal-title" className="w-full rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-md sm:rounded-2xl">
-            <div className="mb-6 flex items-start justify-between">
+          <section role="dialog" aria-modal="true" aria-labelledby="income-goal-title" className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-md sm:rounded-2xl">
+            <div className="mb-5 flex items-start justify-between">
               <div>
-                <p className="font-mono text-xs uppercase tracking-widest text-primary">Objetivo mensual</p>
-                <h2 id="income-goal-title" className="mt-1 font-serif text-2xl font-semibold">Meta de ingresos</h2>
+                <h2 id="income-goal-title" className="font-serif text-2xl font-semibold leading-tight">Meta de ingresos</h2>
               </div>
-              <button type="button" onClick={() => setIncomeGoalEditor(false)} className="rounded-lg p-2 text-muted-foreground hover:bg-muted" aria-label="Cerrar"><X /></button>
+              <button type="button" onClick={() => setIncomeGoalEditor(false)} className="rounded-lg p-3 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Cerrar"><X className="size-5" /></button>
             </div>
             <form onSubmit={saveIncomeGoal} className="flex flex-col gap-4">
               <label className="flex flex-col gap-2 text-sm font-medium">
@@ -953,13 +1021,12 @@ export default function Page() {
 
       {isIncomeFormOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-foreground/35 p-0 sm:items-center sm:p-4">
-          <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-lg sm:rounded-2xl">
-            <div className="mb-6 flex items-start justify-between">
+          <div role="dialog" aria-modal="true" aria-labelledby="income-form-title" className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-lg sm:rounded-2xl">
+            <div className="mb-5 flex items-start justify-between">
               <div>
-                <p className="font-mono text-xs uppercase tracking-widest text-primary">{editingIncome ? 'Editar ingreso' : 'Nuevo ingreso'}</p>
-                <h2 className="mt-1 font-serif text-2xl font-semibold">Registrar un ingreso</h2>
+                <h2 id="income-form-title" className="font-serif text-2xl font-semibold leading-tight">{editingIncome ? 'Editar ingreso' : 'Registrar un ingreso'}</h2>
               </div>
-              <button onClick={() => setIsIncomeFormOpen(false)} className="rounded-lg p-2 text-muted-foreground hover:bg-muted" aria-label="Cerrar"><X /></button>
+              <button type="button" onClick={() => setIsIncomeFormOpen(false)} className="rounded-lg p-3 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Cerrar"><X className="size-5" /></button>
             </div>
 
             <form onSubmit={saveIncome} className="flex flex-col gap-4">
@@ -1281,7 +1348,7 @@ export default function Page() {
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-foreground">-{money.format(expense.amount)}</span>
                           <button type="button" onClick={() => openEditExpense(expense)} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Editar gasto"><Pencil className="size-4" /></button>
-                          <button type="button" onClick={() => deleteExpense(expense.id)} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Eliminar gasto"><Trash2 className="size-4" /></button>
+                          <button type="button" onClick={() => setDeleteExpenseTarget(expense)} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Eliminar gasto"><Trash2 className="size-4" /></button>
                         </div>
                       </div>
                     ))
@@ -1427,13 +1494,12 @@ export default function Page() {
 
       {isFormOpen && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-foreground/35 p-0 sm:items-center sm:p-4">
-          <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-lg sm:rounded-2xl">
-            <div className="mb-6 flex items-start justify-between">
+          <div role="dialog" aria-modal="true" aria-labelledby="expense-form-title" className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-card p-6 shadow-2xl sm:max-w-lg sm:rounded-2xl">
+            <div className="mb-5 flex items-start justify-between">
               <div>
-                <p className="font-mono text-xs uppercase tracking-widest text-primary">{editing ? 'Editar movimiento' : 'Nuevo movimiento'}</p>
-                <h2 className="mt-1 font-serif text-2xl font-semibold">Añadir un gasto</h2>
+                <h2 id="expense-form-title" className="font-serif text-2xl font-semibold leading-tight">{editing ? 'Editar gasto' : 'Añadir un gasto'}</h2>
               </div>
-              <button onClick={() => setIsFormOpen(false)} className="rounded-lg p-2 text-muted-foreground hover:bg-muted" aria-label="Cerrar"><X /></button>
+              <button type="button" onClick={() => setIsFormOpen(false)} className="rounded-lg p-3 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Cerrar"><X className="size-5" /></button>
             </div>
 
             <form onSubmit={saveExpense} className="flex flex-col gap-4">
